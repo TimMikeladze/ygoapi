@@ -36,8 +36,8 @@
 		"test": "bun test",
 		"test:watch": "bun test --watch",
 		"test:coverage": "bun test --coverage",
-		"release": "bumpp --commit --push --tag",
-		"prepare": "simple-git-hooks"
+		"release": "bun run build && bumpp --commit --push --tag && bunx changelogithub && bun publish --access public --no-git-checks",
+		"prepare": "bun simple-git-hooks"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.2.4",
@@ -66,5 +66,18 @@
 	"bugs": {
 		"url": "https://github.com/TimMikeladze/ygoapi/issues"
 	},
-	"license": "MIT"
+	"license": "MIT",
+	"keywords": [
+		"yugioh",
+		"yu-gi-oh",
+		"ygo",
+		"ygoprodeck",
+		"card-game",
+		"trading-cards",
+		"typescript",
+		"tcg",
+		"ocg",
+		"duel-monsters",
+		"card-database"
+	]
 }
