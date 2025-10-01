@@ -226,6 +226,26 @@ describe('YgoApi Integration Tests', () => {
 		})
 	})
 
+	test('should get Genesys format cards with point values', async () => {
+		const result = await api.getCardsByGenesysFormat({ num: 3, offset: 0 })
+		expect(result.data).toBeDefined()
+		expect(Array.isArray(result.data)).toBe(true)
+		expect(result.data.length).toBeGreaterThan(0)
+		expect(result.data.length).toBeLessThanOrEqual(3)
+		result.data.forEach((card) => {
+			expect(card.id).toBeDefined()
+			expect(card.name).toBeDefined()
+			expect(card.type).toBeDefined()
+			expect(card.misc_info).toBeDefined()
+			expect(Array.isArray(card.misc_info)).toBe(true)
+			if (card.misc_info && card.misc_info.length > 0) {
+				const miscInfo = card.misc_info[0]
+				expect(miscInfo).toHaveProperty('genesys_points')
+				expect(typeof miscInfo.genesys_points).toBe('number')
+			}
+		})
+	})
+
 	test('should get cards with pagination', async () => {
 		const result = await api.getCardsWithPagination(2, 0, { sort: 'name' })
 		expect(result.data).toBeDefined()
@@ -666,6 +686,19 @@ describe('Pendulum Monster Tests', () => {
 
 describe('Banlist and Format Tests', () => {
 	const api = new YgoApi()
+
+	test('should get Genesys format cards using general format method', async () => {
+		const result = await api.getCardsByFormat('genesys', { num: 3, offset: 0 })
+		expect(result.data).toBeDefined()
+		expect(Array.isArray(result.data)).toBe(true)
+		expect(result.data.length).toBeGreaterThan(0)
+		expect(result.data.length).toBeLessThanOrEqual(3)
+		result.data.forEach((card) => {
+			expect(card.id).toBeDefined()
+			expect(card.name).toBeDefined()
+			expect(card.type).toBeDefined()
+		})
+	})
 
 	test('should get cards from TCG banlist', async () => {
 		const result = await api.getBanlistCards('TCG', { num: 3, offset: 0 })

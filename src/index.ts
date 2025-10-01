@@ -126,6 +126,7 @@ export type Format =
 	| 'master duel'
 	| 'rush duel'
 	| 'duel links'
+	| 'genesys'
 
 // Banlist Types
 export type BanlistType = 'TCG' | 'OCG' | 'Goat'
@@ -229,6 +230,7 @@ export interface Card {
 		konami_id?: string
 		md_rarity?: string
 		has_effect?: 0 | 1
+		genesys_points?: number
 	}>
 }
 
@@ -714,6 +716,17 @@ export class YgoApi {
 		params?: Omit<CardInfoParams, 'format'>,
 	): Promise<CardInfoResponse> {
 		return this.getCardInfo({ ...params, format })
+	}
+
+	/**
+	 * Get cards in Genesys format with their point values
+	 * @param params - Additional parameters
+	 * @returns Card information response with genesys_points included in misc_info
+	 */
+	async getCardsByGenesysFormat(
+		params?: Omit<CardInfoParams, 'format' | 'misc'>,
+	): Promise<CardInfoResponse> {
+		return this.getCardInfo({ ...params, format: 'genesys', misc: 'yes' })
 	}
 
 	/**
