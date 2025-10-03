@@ -341,6 +341,14 @@ export interface KVStore {
 }
 
 // ============================================
+// Time Queue Interface
+// ============================================
+
+export interface TimeQueue {
+	enqueue<T>(task: () => Promise<T>, signal: AbortSignal): Promise<T>
+}
+
+// ============================================
 // Filesystem Cache Options
 // ============================================
 
@@ -633,6 +641,7 @@ export interface FallbackConfig {
 export interface YgoApiOptions {
 	headers?: HeadersInit
 	cache?: KVStore
+	requestQueue?: TimeQueue
 	cacheTtl?: number
 	retry?: RetryConfig
 	fallback?: FallbackConfig
@@ -662,6 +671,7 @@ export class YgoApi {
 	private readonly baseURL = 'https://db.ygoprodeck.com/api/v7'
 	private readonly headers: HeadersInit
 	private readonly cache?: KVStore
+	private readonly requestQueue?: TimeQueue
 	private readonly cacheTtl: number
 	private readonly retryConfig: Required<RetryConfig>
 	private readonly fallbackConfig: Required<FallbackConfig>
@@ -674,6 +684,7 @@ export class YgoApi {
 			...options?.headers,
 		}
 		this.cache = options?.cache
+		this.requestQueue = options?.requestQueue
 		this.cacheTtl = options?.cacheTtl ?? 300000 // 5 minutes default
 		this.retryConfig = {
 			maxAttempts: options?.retry?.maxAttempts ?? 3,
@@ -869,11 +880,20 @@ export class YgoApi {
 						this.fallbackConfig.timeout,
 					)
 
-					const response = await fetch(url, {
-						method: 'GET',
-						headers: this.headers,
-						signal: controller.signal,
-					})
+					const task = async () =>
+						fetch(url, {
+							method: 'GET',
+							headers: this.headers,
+							signal: controller.signal,
+						})
+
+					let response: Response
+
+					if (this.requestQueue) {
+						response = await this.requestQueue.enqueue(task, controller.signal)
+					} else {
+						response = await task()
+					}
 
 					clearTimeout(timeoutId)
 					const data = await response.json()
