@@ -719,7 +719,7 @@ export class YgoApi {
 	/**
 	 * Build query string from parameters
 	 */
-	private buildQueryString(params?: Record<string, any>): string {
+	private buildQueryString(params?: Record<string, unknown>): string {
 		if (!params) return ''
 
 		const query = new URLSearchParams()
@@ -750,7 +750,10 @@ export class YgoApi {
 	/**
 	 * Generate cache key from endpoint and parameters
 	 */
-	private getCacheKey(endpoint: string, params?: Record<string, any>): string {
+	private getCacheKey(
+		endpoint: string,
+		params?: Record<string, unknown>,
+	): string {
 		const sortedParams = params
 			? JSON.stringify(params, Object.keys(params).sort())
 			: ''
@@ -842,7 +845,7 @@ export class YgoApi {
 	 */
 	private async request<T>(
 		endpoint: string,
-		params?: Record<string, any>,
+		params?: Record<string, unknown>,
 	): Promise<T> {
 		// Validate offset/num parameters
 		if (
@@ -947,7 +950,13 @@ export class YgoApi {
 	 * @returns Card information response
 	 */
 	async getCardInfo(params?: CardInfoParams): Promise<CardInfoResponse> {
-		return this.request<CardInfoResponse>('/cardinfo.php', params)
+		// Type assertion to satisfy Record<string, unknown>
+		const sanitizedKeys: Record<string, unknown> = {}
+		if (params)
+			for (const [key, value] of Object.entries(params)) {
+				sanitizedKeys[key] = value
+			}
+		return this.request<CardInfoResponse>('/cardinfo.php', sanitizedKeys)
 	}
 
 	/**
@@ -1318,7 +1327,7 @@ export class SignalBasedQueue implements TimeQueue {
 					resolve(value)
 				}
 			}
-			const safeReject = (error?: any) => {
+			const safeReject = (error?: unknown) => {
 				if (!isSettled) {
 					isSettled = true
 					reject(error)

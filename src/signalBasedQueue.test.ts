@@ -29,7 +29,7 @@ describe('SignalBasedQueue', () => {
 
 		test('should return true when processing, false when available', async () => {
 			let taskStarted = false
-			let taskResolver: (value: string) => void
+			let taskResolver: (value: string) => void = () => {}
 
 			const task = () =>
 				new Promise<string>((resolve) => {
@@ -43,7 +43,7 @@ describe('SignalBasedQueue', () => {
 			expect(taskStarted).toBe(true)
 
 			// Complete the task
-			taskResolver!('completed')
+			taskResolver('completed')
 			await promise
 
 			// Wait for queue to be available again
@@ -431,7 +431,7 @@ describe('SignalBasedQueue', () => {
 			const results: Array<{
 				id: number
 				status: 'success' | 'error'
-				value?: any
+				value?: unknown
 			}> = []
 
 			const createTask = (id: number, shouldFail: boolean) => async () => {
