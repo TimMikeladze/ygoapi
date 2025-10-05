@@ -3,6 +3,7 @@ import {
 	type Attribute,
 	type CardRace,
 	type CardType,
+	FileSystemKVStore,
 	type KVStore,
 	YgoApi,
 } from '.'
@@ -398,5 +399,124 @@ describe('Cache Performance', () => {
 		const time = Date.now() - start
 
 		expect(time).toBeLessThan(10) // Should be very fast
+	})
+})
+
+describe('FileSystemKVStore', () => {
+	let cache: FileSystemKVStore
+
+	beforeEach(() => {
+		cache = new FileSystemKVStore({
+			cacheDir: '.cache/test/ygoapi/kvstore',
+			maxAge: 1000, // 1 second for testing
+		})
+	})
+
+	test('should create cache with default options', () => {
+		const defaultCache = new FileSystemKVStore()
+		expect(defaultCache).toBeDefined()
+	})
+
+	test('should store and retrieve data', async () => {
+		const key = 'test:key:123'
+		const value = JSON.stringify({ name: 'Dark Magician', id: 46986414 })
+
+		await cache.set(key, value)
+		const retrieved = await cache.get(key)
+
+		expect(retrieved).toBe(value)
+	})
+
+	test('should return null for non-existent key', async () => {
+		const result = await cache.get('nonexistent:key')
+		expect(result).toBeNull()
+	})
+
+	test('should delete cached data', async () => {
+		const key = 'delete:test'
+		const value = 'test value'
+
+		await cache.set(key, value)
+		expect(await cache.get(key)).toBe(value)
+
+		await cache.delete(key)
+		expect(await cache.get(key)).toBeNull()
+	})
+
+	test('should expire old data based on maxAge', async () => {
+		const key = 'expire:test'
+		const value = 'will expire'
+
+		await cache.set(key, value)
+		expect(await cache.get(key)).toBe(value)
+
+		// Wait for expiration
+		await new Promise((resolve) => setTimeout(resolve, 1100))
+
+		// Should be expired
+		const result = await cache.get(key)
+		expect(result).toBeNull()
+	})
+
+	test('should handle hash collisions with different keys', async () => {
+		const key1 = 'ygoapi:/cardinfo.php:{"name":"Dark Magician"}'
+		const key2 = 'ygoapi:/cardinfo.php:{"name":"Blue-Eyes White Dragon"}'
+		const value1 = JSON.stringify({ id: 46986414 })
+		const value2 = JSON.stringify({ id: 89631139 })
+
+		await cache.set(key1, value1)
+		await cache.set(key2, value2)
+
+		expect(await cache.get(key1)).toBe(value1)
+		expect(await cache.get(key2)).toBe(value2)
+	})
+
+	test('should cleanup old files', async () => {
+		const key = 'cleanup:test'
+		const value = 'old data'
+
+		await cache.set(key, value)
+		expect(await cache.get(key)).toBe(value)
+
+		// Wait for file to expire
+		await new Promise((resolve) => setTimeout(resolve, 1100))
+
+		// Cleanup should remove expired files
+		await cache.cleanup()
+
+		const result = await cache.get(key)
+		expect(result).toBeNull()
+	})
+
+	test('should work with YgoApi', async () => {
+		const api = new YgoApi({
+			cache: new FileSystemKVStore({
+				cacheDir: '.cache/test/ygoapi/integration',
+				maxAge: 10000,
+			}),
+		})
+
+		// First request hits API
+		const result1 = await api.getCardByName('Dark Magician')
+		expect(result1).toBeTruthy()
+
+		// Second request uses filesystem cache
+		const result2 = await api.getCardByName('Dark Magician')
+		expect(result2).toEqual(result1)
+	})
+
+	test('should handle concurrent writes', async () => {
+		const keys = Array.from({ length: 10 }, (_, i) => `concurrent:${i}`)
+		const values = keys.map((k) => JSON.stringify({ key: k, data: 'test' }))
+
+		// Write concurrently
+		await Promise.all(keys.map((key, i) => cache.set(key, values[i])))
+
+		// All should be retrievable
+		const results = await Promise.all(keys.map((key) => cache.get(key)))
+
+		results.forEach((result, i) => {
+			expect(result).toBe(values[i])
+		})
 	})
 })

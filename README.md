@@ -7,6 +7,7 @@ A comprehensive TypeScript client for the YGOPRODeck API, providing type-safe ac
 - 🔒 **Type-safe** - Full TypeScript support.
 - 🎯 **Complete coverage** - ALL YGOPRODeck API endpoints and parameters supported.
 - 🛠 **Rich utilities** - Helper functions and convenience methods for common tasks.
+- 📦 **Built in caching** - Caches API responses and card images.
 
 ## Installation
 
@@ -48,9 +49,42 @@ node examples/basic.js
 
 ## Using the Cache
 
-The YgoApi client supports caching through a configurable KV store interface. This helps reduce API calls and stay within rate limits:
+The YgoApi client supports two types of caching:
 
-### Basic Cache Setup
+1. **API Response Cache** - Caches API responses (card data, sets, archetypes)
+2. **Image Cache** - Downloads and caches card images to local filesystem
+
+### API Response Cache
+
+#### Option 1: Filesystem Cache (Recommended)
+
+```typescript
+import { YgoApi, FileSystemKVStore } from 'ygoapi';
+
+// Use built-in filesystem cache for API responses
+const api = new YgoApi({
+  cache: new FileSystemKVStore({
+    cacheDir: '.cache/ygoapi/data',  // Default location
+    maxAge: 10 * 60 * 1000           // Fallback TTL (10 minutes)
+  }),
+  cacheTtl: 10 * 60 * 1000            // TTL per cache entry (10 minutes)
+});
+
+// Data is automatically cached to disk
+const card = await api.getCardByName('Dark Magician');
+
+// Clean up old cache files periodically
+if (api.cache instanceof FileSystemKVStore) {
+  await api.cache.cleanup();
+}
+```
+
+**How TTL works:**
+- `cacheTtl` is used as the TTL for each individual cache entry
+- `maxAge` is the fallback if `cacheTtl` is not provided
+- Each cached file's age is checked on retrieval
+
+#### Option 2: In-Memory Cache
 
 ```typescript
 import { YgoApi } from 'ygoapi';
@@ -78,26 +112,173 @@ class MemoryCache {
   }
 }
 
-// Create API instance with caching
+// Create API instance with in-memory caching
 const api = new YgoApi({
   cache: new MemoryCache(),
   cacheTtl: 600000 // 10 minutes
 });
 ```
 
-### Cache Configuration Options
+### Image Cache (Filesystem-based)
+
+The image cache automatically downloads and stores card images locally for faster access:
 
 ```typescript
+import { YgoApi } from 'ygoapi';
+
+// Enable image caching with default settings
 const api = new YgoApi({
-  cache: yourCacheStore,      // KV store implementation
-  cacheTtl: 300000           // Cache TTL in milliseconds (default: 5 minutes)
+  imageCacheEnabled: true  // Uses default: .cache/ygoapi/images
 });
+
+// Or configure custom cache directory
+const api = new YgoApi({
+  imageCacheEnabled: true,
+  imageCache: {
+    cacheDir: './my-card-images',
+    maxAge: 7 * 24 * 60 * 60 * 1000  // 7 days
+  }
+});
+
+// Images are automatically cached in the background
+const card = await api.getCardByName('Dark Magician');
+
+// Get local filesystem path to cached image
+const imagePath = await api.getLocalImagePath(card, 'small');
+// Returns: '.cache/ygoapi/images/46986414/small.jpg'
+
+// Use in your application
+if (imagePath) {
+  console.log(`Image cached at: ${imagePath}`);
+  // Read file, serve via HTTP, etc.
+}
+```
+
+### Image Cache Features
+
+- **Automatic caching** - Images download in background when cards are fetched
+- **Multiple sizes** - Caches default, small, and cropped versions
+- **Organized storage** - Files organized by card ID in subdirectories
+- **Cleanup support** - Remove old cached images
+
+```typescript
+// Get different image sizes
+const defaultImage = await api.getLocalImagePath(card, 'default');
+const smallImage = await api.getLocalImagePath(card, 'small');
+const croppedImage = await api.getLocalImagePath(card, 'cropped');
+
+// Clean up old cached images (based on maxAge)
+await api.cleanupImageCache();
+```
+
+### Cache Directory Structure
+
+```
+.cache/ygoapi/images/
+├── 46986414/
+│   ├── default.jpg
+│   ├── small.jpg
+│   └── cropped.jpg
+├── 89631139/
+│   ├── default.jpg
+│   ├── small.jpg
+│   └── cropped.jpg
+```
+
+### Custom Image Cache Implementation
+
+You can provide a custom KVStore for image caching:
+
+```typescript
+class S3ImageCache {
+  async get(key: string): Promise<string | null> {
+    // Return S3 URL or local path
+  }
+
+  async set(key: string, value: string): Promise<void> {
+    // Download from value URL and upload to S3
+  }
+
+  async delete(key: string): Promise<void> {
+    // Delete from S3
+  }
+}
+
+const api = new YgoApi({
+  imageCacheEnabled: true,
+  imageCache: new S3ImageCache()
+});
+```
+
+### Complete Caching Example
+
+Here's a complete example using both API response cache and image cache:
+
+```typescript
+import { YgoApi, FileSystemKVStore, FileSystemImageCache } from 'ygoapi';
+
+const api = new YgoApi({
+  // API response cache (disk-based)
+  cache: new FileSystemKVStore({
+    cacheDir: '.cache/ygoapi/data',
+    maxAge: 10 * 60 * 1000  // 10 minutes
+  }),
+  cacheTtl: 10 * 60 * 1000,
+
+  // Image cache (disk-based)
+  imageCacheEnabled: true,
+  imageCache: {
+    cacheDir: '.cache/ygoapi/images',
+    maxAge: 7 * 24 * 60 * 60 * 1000  // 7 days
+  }
+});
+
+// First request: Fetches from API, caches response and images
+const card = await api.getCardByName('Dark Magician');
+
+// Second request: Uses cached response (instant)
+const card2 = await api.getCardByName('Dark Magician');
+
+// Get local image path
+const imagePath = await api.getLocalImagePath(card, 'small');
+console.log(`Image cached at: ${imagePath}`);
+
+// Periodic cleanup (run in background or cron job)
+if (api.cache instanceof FileSystemKVStore) {
+  await api.cache.cleanup();
+}
+await api.cleanupImageCache();
+```
+
+### Cache Directory Structure
+
+When using filesystem caches, your directory structure will look like:
+
+```
+.cache/ygoapi/
+├── data/                           # API response cache
+│   ├── a1b2c3d4...json            # Hashed cache keys
+│   ├── e5f6g7h8...json
+│   └── ...
+└── images/                         # Image cache
+    ├── 46986414/
+    │   ├── default.jpg
+    │   ├── small.jpg
+    │   └── cropped.jpg
+    └── 89631139/
+        ├── default.jpg
+        ├── small.jpg
+        └── cropped.jpg
 ```
 
 ### Cache Benefits
 
 - **Reduces API calls** - Repeated requests return cached data
-- **Respects rate limits** - Helps stay under 20 requests/second limit  
+- **Respects rate limits** - Helps stay under 20 requests/second limit
+- **Faster image loading** - Serve images from local filesystem
+- **Offline support** - Access cached images without internet
+- **Persistent cache** - Survives application restarts
+- **Automatic cleanup** - Remove expired cache files
 - **Improves performance** - Faster response times for cached data
 - **Automatic invalidation** - Cache entries expire based on TTL
 
