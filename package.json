@@ -1,7 +1,7 @@
 {
 	"name": "ygoapi",
 	"description": "TypeScript client for the YGOPRODeck API v7 - Yu-Gi-Oh! card database access",
-	"version": "1.0.2",
+	"version": "1.1.0",
 	"author": {
 		"name": "Tim Mikeladze",
 		"email": "tim.mikeladze@gmail.com"
