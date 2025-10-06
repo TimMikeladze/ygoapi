@@ -341,6 +341,14 @@ export interface KVStore {
 }
 
 // ============================================
+// Time Queue Interface
+// ============================================
+
+export interface TimeQueue {
+	enqueue<T>(task: () => Promise<T>, signal: AbortSignal): Promise<T>
+}
+
+// ============================================
 // Filesystem Cache Options
 // ============================================
 
@@ -633,6 +641,7 @@ export interface FallbackConfig {
 export interface YgoApiOptions {
 	headers?: HeadersInit
 	cache?: KVStore
+	requestQueue?: TimeQueue
 	cacheTtl?: number
 	retry?: RetryConfig
 	fallback?: FallbackConfig
@@ -662,6 +671,7 @@ export class YgoApi {
 	private readonly baseURL = 'https://db.ygoprodeck.com/api/v7'
 	private readonly headers: HeadersInit
 	private readonly cache?: KVStore
+	private readonly requestQueue: TimeQueue
 	private readonly cacheTtl: number
 	private readonly retryConfig: Required<RetryConfig>
 	private readonly fallbackConfig: Required<FallbackConfig>
@@ -674,6 +684,7 @@ export class YgoApi {
 			...options?.headers,
 		}
 		this.cache = options?.cache
+		this.requestQueue = options?.requestQueue || new SignalBasedQueue(50) // Default to a 20 RPS queue
 		this.cacheTtl = options?.cacheTtl ?? 300000 // 5 minutes default
 		this.retryConfig = {
 			maxAttempts: options?.retry?.maxAttempts ?? 3,
@@ -708,7 +719,7 @@ export class YgoApi {
 	/**
 	 * Build query string from parameters
 	 */
-	private buildQueryString(params?: Record<string, any>): string {
+	private buildQueryString(params?: Record<string, unknown>): string {
 		if (!params) return ''
 
 		const query = new URLSearchParams()
@@ -739,7 +750,10 @@ export class YgoApi {
 	/**
 	 * Generate cache key from endpoint and parameters
 	 */
-	private getCacheKey(endpoint: string, params?: Record<string, any>): string {
+	private getCacheKey(
+		endpoint: string,
+		params?: Record<string, unknown>,
+	): string {
 		const sortedParams = params
 			? JSON.stringify(params, Object.keys(params).sort())
 			: ''
@@ -831,7 +845,7 @@ export class YgoApi {
 	 */
 	private async request<T>(
 		endpoint: string,
-		params?: Record<string, any>,
+		params?: Record<string, unknown>,
 	): Promise<T> {
 		// Validate offset/num parameters
 		if (
@@ -869,11 +883,17 @@ export class YgoApi {
 						this.fallbackConfig.timeout,
 					)
 
-					const response = await fetch(url, {
-						method: 'GET',
-						headers: this.headers,
-						signal: controller.signal,
-					})
+					const task = async () =>
+						fetch(url, {
+							method: 'GET',
+							headers: this.headers,
+							signal: controller.signal,
+						})
+
+					const response = await this.requestQueue.enqueue(
+						task,
+						controller.signal,
+					)
 
 					clearTimeout(timeoutId)
 					const data = await response.json()
@@ -930,7 +950,13 @@ export class YgoApi {
 	 * @returns Card information response
 	 */
 	async getCardInfo(params?: CardInfoParams): Promise<CardInfoResponse> {
-		return this.request<CardInfoResponse>('/cardinfo.php', params)
+		// Type assertion to satisfy Record<string, unknown>
+		const sanitizedKeys: Record<string, unknown> = {}
+		if (params)
+			for (const [key, value] of Object.entries(params)) {
+				sanitizedKeys[key] = value
+			}
+		return this.request<CardInfoResponse>('/cardinfo.php', sanitizedKeys)
 	}
 
 	/**
@@ -1228,6 +1254,168 @@ export class YgoApi {
 		if (this.imageCache instanceof FileSystemImageCache) {
 			await this.imageCache.cleanup()
 		}
+	}
+}
+
+// ============================================
+// Signal based Time Queue class
+// ============================================
+
+export class SignalBasedQueue implements TimeQueue {
+	/**
+	 * Array of AbortControllers representing queued tasks
+	 */
+	private readonly queue: AbortController[] = []
+	/**
+	 * Interval in milliseconds between task beginnings
+	 */
+	public readonly interval: number
+
+	/**
+	 * Flag indicating if the queue is currently being processed.
+	 * We use an AbortController to signal processing state to have a
+	 * signal that can be listened to for processing state changes.
+	 */
+	private _processing: AbortController | null = null
+	public get processing(): boolean {
+		return this._processing !== null && !this._processing.signal.aborted
+	}
+
+	/**
+	 * Creates an instance of the SignalBasedQueue.
+	 * @param interval Interval in milliseconds between task beginnings, default is 1000ms
+	 */
+	constructor(interval?: number) {
+		this.interval = interval || 1000
+	}
+
+	/**
+	 * Main loop that processes the signal based queue
+	 */
+	private async processQueue() {
+		// Abort if already processing
+		if (this.processing) return
+
+		// Loop through the queue until empty
+		this._processing = new AbortController()
+		while (this.queue.length > 0) {
+			const task = this.queue.shift()
+
+			if (task) {
+				// Signal the task is ready to be executed
+				task.abort()
+				// Wait for the defined interval before processing the next task
+				await new Promise((resolve) => setTimeout(resolve, this.interval))
+			}
+		}
+		this._processing?.abort()
+	}
+
+	/**
+	 * Enqueue a task to be executed
+	 * @param task The task to be executed, must return a Promise
+	 * @param signal Optional AbortSignal to cancel the task
+	 * @returns A Promise that resolves with the task's result or rejects if the task is aborted
+	 */
+	public enqueue<T>(task: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+		return new Promise<T>((resolve, reject) => {
+			// Ensure the promise settles only once
+			let isSettled = false
+			const safeResolve = (value: T) => {
+				if (!isSettled) {
+					isSettled = true
+					resolve(value)
+				}
+			}
+			const safeReject = (error?: unknown) => {
+				if (!isSettled) {
+					isSettled = true
+					reject(error)
+				}
+			}
+
+			// If the provided signal is already aborted, reject immediately
+			if (signal?.aborted) {
+				safeReject(new DOMException('Aborted before enqueueing', 'AbortError'))
+				return
+			}
+
+			// We use an AbortController to signal when the task is ready to be executed
+			const readyController = new AbortController()
+
+			// Enqueue the task, represented by its controller
+			this.queue.push(readyController)
+
+			// Handler to dequeue the task if the provided signal is aborted, and reject the promise
+			const onAbort = () => {
+				const index = this.queue.indexOf(readyController)
+				if (index !== -1) {
+					this.queue.splice(index, 1)
+				}
+				safeReject(new DOMException('Aborted while enqueued', 'AbortError'))
+			}
+
+			// If an external signal is provided, listen for its abort event
+			if (signal) {
+				signal.addEventListener('abort', onAbort)
+			}
+			// Listening to the queue signaling the task is ready to be executed
+			readyController.signal.addEventListener('abort', () => {
+				// Clean up the abort listener, let the task handle its own abort if needed
+				if (signal) {
+					signal.removeEventListener('abort', onAbort)
+				}
+				// Execute the task
+				// Any resolution or rejections will be passed to the caller
+				task().then(safeResolve).catch(safeReject)
+			})
+
+			// Start processing the queue if not already doing so
+			if (!this.processing) {
+				this.processQueue()
+			}
+		})
+	}
+
+	/**
+	 * Helper method to await until the queue is done processing
+	 * @param timeoutMs Optional timeout in milliseconds. If provided, the promise will reject after this delay
+	 * @returns A Promise that resolves when the queue is done starting all tasks or rejects if timeout is reached
+	 */
+	public doneProcessing(timeoutMs?: number): Promise<void> {
+		return new Promise((resolve, reject) => {
+			// If not currently processing, resolve immediately
+			if (!this.processing) {
+				resolve()
+				return
+			}
+
+			let timeoutId: Timer | undefined
+
+			// Set up processing completion listener
+			const onProcessingDone = () => {
+				if (timeoutId) {
+					clearTimeout(timeoutId)
+				}
+				resolve()
+			}
+
+			// Set up timeout if provided
+			if (timeoutMs !== undefined && timeoutMs > 0) {
+				timeoutId = setTimeout(() => {
+					this._processing?.signal.removeEventListener(
+						'abort',
+						onProcessingDone,
+					)
+					reject(
+						new Error(`Queue still processing after ${timeoutMs}ms timeout`),
+					)
+				}, timeoutMs)
+			}
+
+			// Listen for processing completion
+			this._processing?.signal.addEventListener('abort', onProcessingDone)
+		})
 	}
 }
 

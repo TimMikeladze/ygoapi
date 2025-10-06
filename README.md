@@ -815,6 +815,33 @@ The YGOPRODeck API has rate limiting:
 - Exceeding this limit results in a **1-hour IP ban**
 - Cache responses locally to minimize API calls
 
+The **YgoApi client** automatically throttles requests to comply with the 20 requests/second limit. It uses a built-in queue system (`SignalBasedQueue`) that spaces out requests to avoid bans. Throttling behavior can be customized by providing a different interval or your own queue implementation via the `requestQueue` option and the `TimeQueue` interface.
+
+The default signal-based queue allows up to 20 requests to *start* per second, but does not wait for their completion before processing the next requests.
+
+### Custom Throttling
+
+```typescript
+import { YgoApi, SignalBasedQueue } from 'ygoapi'
+import type { TimeQueue } from 'ygoapi'
+
+const api = new YgoApi({
+  requestQueue: new SignalBasedQueue(1000) // 1000ms throttling between fetch starts
+})
+
+class MyQueue implements TimeQueue {
+  // The method needs to pass down the resolution of the task
+  enqueue<T>(task: () => Promise<T>, signal: AbortSignal): Promise<T> {
+    //... Your implementation ...
+  }
+  // ... Your implementation ...
+}
+
+const myApi = new YgoApi({
+  requestQueue: new MyQueue()
+})
+```
+
 ## Testing
 
 This library includes comprehensive test coverage with 53+ tests covering all features:
