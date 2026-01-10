@@ -295,6 +295,26 @@ const tcgCards = await api.getCardsByFormat('tcg');
 const speedDuelCards = await api.getCardsByFormat('speed duel');
 const rushDuelCards = await api.getCardsByFormat('rush duel');
 const masterDuelCards = await api.getCardsByFormat('master duel');
+const genesysCards = await api.getCardsByFormat('genesys');
+```
+
+#### `getCardsByGenesysFormat(params?: Omit<CardInfoParams, 'format' | 'misc'>): Promise<CardInfoResponse>`
+
+Get cards in the Genesys format with their point values. This method automatically includes `misc: 'yes'` to ensure `genesys_points` is returned.
+
+```typescript
+const genesysCards = await api.getCardsByGenesysFormat();
+
+// Access genesys points from misc_info
+genesysCards.data.forEach(card => {
+  const points = card.misc_info?.[0]?.genesys_points ?? 0;
+  console.log(`${card.name}: ${points} points`);
+});
+
+// Filter by archetype while getting genesys points
+const blueEyesGenesys = await api.getCardsByGenesysFormat({
+  archetype: 'Blue-Eyes'
+});
 ```
 
 #### `getBanlistCards(banlist: BanlistType, params?: Omit<CardInfoParams, 'banlist'>): Promise<CardInfoResponse>`
@@ -506,7 +526,7 @@ interface CardInfoParams {
   
   // Format/Banlist
   banlist?: BanlistType;           // TCG, OCG, or Goat
-  format?: Format;                 // Game format
+  format?: Format;                 // Game format (tcg, goat, ocg goat, speed duel, master duel, rush duel, duel links, genesys)
   
   // Special filters
   staple?: "yes";                  // Staple cards only
