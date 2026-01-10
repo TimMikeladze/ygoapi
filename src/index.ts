@@ -349,280 +349,6 @@ export interface TimeQueue {
 }
 
 // ============================================
-// Filesystem Cache Options
-// ============================================
-
-export interface FileSystemCacheOptions {
-	cacheDir?: string // Default: '.cache/ygoapi/images' for images, '.cache/ygoapi/data' for API responses
-	maxAge?: number // Max file age in ms (for cleanup)
-}
-
-// ============================================
-// Filesystem KV Store (for API responses)
-// ============================================
-
-export class FileSystemKVStore implements KVStore {
-	private cacheDir: string
-	private maxAge: number
-	private ttlMap: Map<string, number> = new Map()
-
-	constructor(options: FileSystemCacheOptions = {}) {
-		this.cacheDir = options.cacheDir || '.cache/ygoapi/data'
-		this.maxAge = options.maxAge || 5 * 60 * 1000 // 5 minutes default
-	}
-
-	/**
-	 * Get cached data
-	 * @param key - Cache key
-	 * @returns Cached value if exists and not expired, null otherwise
-	 */
-	async get(key: string): Promise<string | null> {
-		const filePath = this.keyToPath(key)
-
-		try {
-			const { access, readFile, stat } = await import('node:fs/promises')
-
-			// Check if file exists
-			await access(filePath)
-
-			// Check if expired
-			const stats = await stat(filePath)
-			const now = Date.now()
-
-			// Use TTL from map if available, otherwise use maxAge
-			const ttl = this.ttlMap.get(key) || this.maxAge
-
-			if (now - stats.mtimeMs > ttl) {
-				// File is expired, delete it
-				await this.delete(key)
-				this.ttlMap.delete(key)
-				return null
-			}
-
-			// Read and return data
-			const data = await readFile(filePath, 'utf-8')
-			return data
-		} catch {
-			return null
-		}
-	}
-
-	/**
-	 * Set cached data
-	 * @param key - Cache key
-	 * @param value - Value to cache
-	 * @param ttl - Time to live in milliseconds (optional, uses maxAge if not provided)
-	 */
-	async set(key: string, value: string, ttl?: number): Promise<void> {
-		const filePath = this.keyToPath(key)
-
-		try {
-			const { mkdir, writeFile } = await import('node:fs/promises')
-			const { dirname } = await import('node:path')
-
-			// Ensure directory exists
-			await mkdir(dirname(filePath), { recursive: true })
-
-			// Write data
-			await writeFile(filePath, value, 'utf-8')
-
-			// Store TTL for this key if provided
-			if (ttl !== undefined) {
-				this.ttlMap.set(key, ttl)
-			}
-		} catch {
-			// Silent fail
-		}
-	}
-
-	/**
-	 * Delete cached data
-	 * @param key - Cache key
-	 */
-	async delete(key: string): Promise<void> {
-		const filePath = this.keyToPath(key)
-
-		try {
-			const { unlink } = await import('node:fs/promises')
-			await unlink(filePath)
-			this.ttlMap.delete(key)
-		} catch {
-			// Silent fail
-		}
-	}
-
-	/**
-	 * Convert cache key to file path
-	 * @param key - Cache key (e.g., "ygoapi:/cardinfo.php:{params}")
-	 * @returns Full file path
-	 */
-	private keyToPath(key: string): string {
-		// Hash the key to create a safe filename
-		const crypto = require('node:crypto')
-		const hash = crypto.createHash('sha256').update(key).digest('hex')
-
-		const pathModule = require('node:path')
-		return pathModule.join(this.cacheDir, `${hash}.json`)
-	}
-
-	/**
-	 * Clean up old cached files
-	 * Removes files older than maxAge
-	 */
-	async cleanup(): Promise<void> {
-		const now = Date.now()
-
-		const walk = async (dir: string): Promise<void> => {
-			try {
-				const { readdir, stat, unlink } = await import('node:fs/promises')
-
-				const entries = await readdir(dir, { withFileTypes: true })
-
-				for (const entry of entries) {
-					const { join } = await import('node:path')
-					const fullPath = join(dir, entry.name)
-
-					if (entry.isDirectory()) {
-						await walk(fullPath)
-					} else if (entry.name.endsWith('.json')) {
-						const stats = await stat(fullPath)
-						if (now - stats.mtimeMs > this.maxAge) {
-							await unlink(fullPath)
-						}
-					}
-				}
-			} catch {
-				// Silent fail
-			}
-		}
-
-		await walk(this.cacheDir)
-	}
-}
-
-// ============================================
-// Filesystem Image Cache
-// ============================================
-
-export class FileSystemImageCache implements KVStore {
-	private cacheDir: string
-	private maxAge: number
-
-	constructor(options: FileSystemCacheOptions = {}) {
-		this.cacheDir = options.cacheDir || '.cache/ygoapi/images'
-		this.maxAge = options.maxAge || 30 * 24 * 60 * 60 * 1000 // 30 days default
-	}
-
-	/**
-	 * Get cached image path
-	 * @param key - Format: "cardId:size" (e.g., "89631139:default")
-	 * @returns File path if exists, null otherwise
-	 */
-	async get(key: string): Promise<string | null> {
-		const filePath = this.keyToPath(key)
-
-		try {
-			const { access } = await import('node:fs/promises')
-			await access(filePath)
-			return filePath
-		} catch {
-			return null
-		}
-	}
-
-	/**
-	 * Download and cache image from URL
-	 * @param key - Format: "cardId:size"
-	 * @param value - Source URL to download from
-	 */
-	async set(key: string, value: string, _ttl?: number): Promise<void> {
-		const filePath = this.keyToPath(key)
-
-		try {
-			const { mkdir, writeFile } = await import('node:fs/promises')
-			const { dirname } = await import('node:path')
-
-			// Ensure directory exists
-			await mkdir(dirname(filePath), { recursive: true })
-
-			// Download image
-			const response = await fetch(value)
-			if (!response.ok) {
-				throw new Error(
-					`Failed to download image: ${response.status} ${response.statusText}`,
-				)
-			}
-
-			const buffer = await response.arrayBuffer()
-			await writeFile(filePath, Buffer.from(buffer))
-		} catch {
-			// Silent fail - will use original URL
-		}
-	}
-
-	/**
-	 * Delete cached image
-	 * @param key - Format: "cardId:size"
-	 */
-	async delete(key: string): Promise<void> {
-		const filePath = this.keyToPath(key)
-
-		try {
-			const { unlink } = await import('node:fs/promises')
-			await unlink(filePath)
-		} catch {
-			// Silent fail
-		}
-	}
-
-	/**
-	 * Convert cache key to file path
-	 * @param key - Format: "cardId:size"
-	 * @returns Full file path
-	 */
-	private keyToPath(key: string): string {
-		const [cardId, size] = key.split(':')
-		// Use dynamic import for path to support both Node and edge environments
-		const pathModule = require('node:path')
-		return pathModule.join(this.cacheDir, cardId, `${size}.jpg`)
-	}
-
-	/**
-	 * Clean up old cached images
-	 * Removes files older than maxAge
-	 */
-	async cleanup(): Promise<void> {
-		const now = Date.now()
-
-		const walk = async (dir: string): Promise<void> => {
-			try {
-				const { readdir, stat, unlink } = await import('node:fs/promises')
-
-				const entries = await readdir(dir, { withFileTypes: true })
-
-				for (const entry of entries) {
-					const { join } = await import('node:path')
-					const fullPath = join(dir, entry.name)
-
-					if (entry.isDirectory()) {
-						await walk(fullPath)
-					} else {
-						const stats = await stat(fullPath)
-						if (now - stats.mtimeMs > this.maxAge) {
-							await unlink(fullPath)
-						}
-					}
-				}
-			} catch {
-				// Silent fail
-			}
-		}
-
-		await walk(this.cacheDir)
-	}
-}
-
-// ============================================
 // Configuration Interfaces
 // ============================================
 
@@ -645,8 +371,7 @@ export interface YgoApiOptions {
 	cacheTtl?: number
 	retry?: RetryConfig
 	fallback?: FallbackConfig
-	imageCache?: FileSystemCacheOptions | KVStore
-	imageCacheEnabled?: boolean
+	imageCache?: KVStore
 }
 
 // ============================================
@@ -676,7 +401,6 @@ export class YgoApi {
 	private readonly retryConfig: Required<RetryConfig>
 	private readonly fallbackConfig: Required<FallbackConfig>
 	private readonly imageCache?: KVStore
-	private readonly imageCacheEnabled: boolean
 
 	constructor(options?: YgoApiOptions) {
 		this.headers = {
@@ -696,24 +420,7 @@ export class YgoApi {
 			urls: options?.fallback?.urls ?? [],
 			timeout: options?.fallback?.timeout ?? 5000,
 		}
-
-		// Initialize image cache
-		this.imageCacheEnabled = options?.imageCacheEnabled ?? false
-
-		if (this.imageCacheEnabled && !options?.imageCache) {
-			// Auto-initialize with default filesystem cache
-			this.imageCache = new FileSystemImageCache()
-		} else if (options?.imageCache) {
-			// Use provided cache (either FileSystemCacheOptions or KVStore)
-			if (
-				typeof options.imageCache === 'object' &&
-				'cacheDir' in options.imageCache
-			) {
-				this.imageCache = new FileSystemImageCache(options.imageCache)
-			} else {
-				this.imageCache = options.imageCache as KVStore
-			}
-		}
+		this.imageCache = options?.imageCache
 	}
 
 	/**
@@ -821,7 +528,7 @@ export class YgoApi {
 	 * Cache images for multiple cards in background
 	 */
 	private cacheImagesInBackground(data: CardInfoResponse | Card): void {
-		if (!this.imageCacheEnabled || !this.imageCache) return
+		if (!this.imageCache) return
 
 		const cards = Array.isArray(data)
 			? data
@@ -1244,16 +951,6 @@ export class YgoApi {
 
 		const key = `${imageId}:${size}`
 		return await this.imageCache.get(key)
-	}
-
-	/**
-	 * Clean up old cached images
-	 * Only works with FileSystemImageCache
-	 */
-	async cleanupImageCache(): Promise<void> {
-		if (this.imageCache instanceof FileSystemImageCache) {
-			await this.imageCache.cleanup()
-		}
 	}
 }
 
